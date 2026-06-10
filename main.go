@@ -7,77 +7,47 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
+	"os"
 	"strconv"
 	"time"
 )
 
-var botToken = "8441638008:AAFjrF8PQtHfWmX3AaqThjF7cYt_4d3CPbQ"
+var botToken = os.Getenv("BOT_TOKEN")
 var apiURL = "https://api.telegram.org/bot" + botToken
-
-// Настройки MTProto прокси из Telegram Desktop
-var proxyServer = "127.0.0.1:1443" // замените на ваш хост:порт
-
-var client *http.Client
-
-func main() {
-	// Создаём HTTP клиент, который ходит через SOCKS5
-	proxyURL, _ := url.Parse("socks5://" + proxyServer)
-	
-	client = &http.Client{
-		Transport: &http.Transport{
-			Proxy: http.ProxyURL(proxyURL),
-		},
-		Timeout: 30 * time.Second,
-	}
-
-	fmt.Println("Проверяю подключение...")
-	resp, err := client.Get("https://api.telegram.org")
-	if err != nil {
-		fmt.Println("❌ Ошибка подключения:", err)
-		fmt.Println("\nВозможно, нужен другой адрес прокси.")
-		fmt.Println("Откройте Telegram Desktop → Настройки → Прокси")
-		fmt.Println("Найдите SOCKS5 или HTTP прокси (не MTProto)")
-		return
-	}
-	resp.Body.Close()
-	fmt.Println("✅ Бот запущен!")
-	
-	// Запускаем бота
-	runBot()
-}
 
 type Update struct {
 	UpdateID int      `json:"update_id"`
 	Message  Message  `json:"message"`
 	Callback Callback `json:"callback_query"`
 }
-
 type Message struct {
 	MessageID int    `json:"message_id"`
 	Text      string `json:"text"`
 	Chat      Chat   `json:"chat"`
 	From      User   `json:"from"`
 }
-
 type Callback struct {
 	ID      string  `json:"id"`
 	Data    string  `json:"data"`
 	Message Message `json:"message"`
 	From    User    `json:"from"`
 }
-
 type Chat struct {
 	ID int64 `json:"id"`
 }
-
 type User struct {
 	ID        int64  `json:"id"`
 	FirstName string `json:"first_name"`
 	Username  string `json:"username"`
 }
 
-func runBot() {
+func main() {
+	if botToken == "" {
+		log.Fatal("BOT_TOKEN не установлен")
+	}
+
+	fmt.Println("✅ Бот запущен на Render!")
+
 	offset := 0
 	for {
 		updates, err := getUpdates(offset)
@@ -86,7 +56,6 @@ func runBot() {
 			time.Sleep(2 * time.Second)
 			continue
 		}
-
 		for _, update := range updates {
 			offset = update.UpdateID + 1
 			if update.Callback.ID != "" {
@@ -100,13 +69,11 @@ func runBot() {
 }
 
 func getUpdates(offset int) ([]Update, error) {
-	url := apiURL + "/getUpdates?offset=" + strconv.Itoa(offset) + "&timeout=10"
-	resp, err := client.Get(url)
+	resp, err := http.Get(apiURL + "/getUpdates?offset=" + strconv.Itoa(offset) + "&timeout=10")
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
 	body, _ := io.ReadAll(resp.Body)
 	var result struct {
 		Result []Update `json:"result"`
@@ -120,7 +87,6 @@ func handleMessage(msg Message) {
 	case "/start":
 		text := fmt.Sprintf("👋 Привет, %s!\n\nДобро пожаловать в SuperVPN!\n/profile — профиль\n/buy — купить подписку", msg.From.FirstName)
 		sendMessage(msg.Chat.ID, text, nil)
-
 	case "/profile":
 		text := fmt.Sprintf("👤 %s | 🥉 Бронза\n├ ID: %d\n├ С нами: Сегодня\n└ Баланс: 0.00 ₽\n\n📱 Подписка 🔴 Неактивна\n├ Тариф: Не выбран\n└ Нажми /buy чтобы активировать\n\n👥 Рефералы: 0\n📊 Трафик: 0 B", msg.From.FirstName, msg.From.ID)
 		keyboard := map[string]interface{}{
@@ -131,7 +97,6 @@ func handleMessage(msg Message) {
 			},
 		}
 		sendMessage(msg.Chat.ID, text, keyboard)
-
 	case "/buy":
 		keyboard := map[string]interface{}{
 			"inline_keyboard": [][]map[string]string{
@@ -142,7 +107,6 @@ func handleMessage(msg Message) {
 			},
 		}
 		sendMessage(msg.Chat.ID, "🛒 Выберите тариф:", keyboard)
-
 	default:
 		sendMessage(msg.Chat.ID, "Используй /profile или /buy", nil)
 	}
@@ -181,19 +145,19 @@ func sendMessage(chatID int64, text string, replyMarkup map[string]interface{}) 
 	data := map[string]interface{}{"chat_id": chatID, "text": text, "parse_mode": "HTML"}
 	if replyMarkup != nil { data["reply_markup"] = replyMarkup }
 	jsonData, _ := json.Marshal(data)
-	client.Post(apiURL+"/sendMessage", "application/json", bytes.NewBuffer(jsonData))
+	http.Post(apiURL+"/sendMessage", "application/json", bytes.NewBuffer(jsonData))
 }
 
 func editOrSend(chatID int64, messageID int, text string, replyMarkup map[string]interface{}) {
 	data := map[string]interface{}{"chat_id": chatID, "message_id": messageID, "text": text, "parse_mode": "HTML"}
 	if replyMarkup != nil { data["reply_markup"] = replyMarkup }
 	jsonData, _ := json.Marshal(data)
-	resp, err := client.Post(apiURL+"/editMessageText", "application/json", bytes.NewBuffer(jsonData))
+	resp, err := http.Post(apiURL+"/editMessageText", "application/json", bytes.NewBuffer(jsonData))
 	if err != nil || resp.StatusCode != 200 { sendMessage(chatID, text, replyMarkup) }
 }
 
 func answerCallback(callbackID string, text string) {
 	data := map[string]string{"callback_query_id": callbackID, "text": text}
 	jsonData, _ := json.Marshal(data)
-	client.Post(apiURL+"/answerCallbackQuery", "application/json", bytes.NewBuffer(jsonData))
+	http.Post(apiURL+"/answerCallbackQuery", "application/json", bytes.NewBuffer(jsonData))
 }
